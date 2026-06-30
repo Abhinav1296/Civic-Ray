@@ -1,0 +1,9 @@
+flask
+python-dotenv
+langchain-community
+langchain-huggingface
+openai
+faiss-cpu
+pypdf
+sentence-transformers
+gunicorn
