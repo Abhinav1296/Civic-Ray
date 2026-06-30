@@ -32,4 +32,4 @@ COPY --chown=user . .
 EXPOSE 7860
 
 # Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:7860", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:7860", "app:flask_app"]
