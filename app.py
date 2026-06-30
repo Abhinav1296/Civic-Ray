@@ -10,17 +10,10 @@ from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from openai import OpenAI
 
-# ---------------------------------------------------------------------------
 # 0.  Environment & Global Configuration
-# ---------------------------------------------------------------------------
-# Load all secrets from the project-root .env file before reading any
-# os.getenv() calls.  This must happen before the constants below.
 load_dotenv()
 
-# ---------------------------------------------------------------------------
 # Application-Level Constants
-# ---------------------------------------------------------------------------
-
 DB_PATH: str = "vector_db"
 """Filesystem path to the pre-built FAISS index directory."""
 
@@ -47,66 +40,23 @@ A low value (→ 0) makes outputs near-deterministic and factual,
 which is desirable for legal Q&A where precision outweighs creativity.
 """
 
-# ---------------------------------------------------------------------------
 # LLM Provider Configuration
-# ---------------------------------------------------------------------------
-# Both OpenRouter and Groq expose OpenAI-compatible endpoints.
-# We configure each as a named tuple of (base_url, api_key, model_id).
-# This makes the fallback logic completely explicit and easy to read.
-
 OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL: str = "google/gemini-2.0-flash-exp:free"
-"""
-Google Gemini 2.0 Flash (Experimental) via OpenRouter free tier.
-
-Why this model?
-- 1M token context window handles large retrieved legal documents.
-- Genuinely free with no per-query cost on OpenRouter free tier.
-- Strong instruction-following for structured legal prompts.
-- Fast inference latency (~2-4s for typical legal queries).
-"""
 
 GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL: str = "llama-3.3-70b-versatile"
-"""
-Meta LLaMA 3.3 70B Versatile via Groq free tier.
-
-Why this model?
-- 70 billion parameters: excellent legal reasoning capability.
-- 32k token context window: fits all retrieved bye-law chunks.
-- Groq's LPU hardware delivers ~300 tokens/sec — fastest free option.
-- 'versatile' variant is tuned for instruction-following and Q&A.
-"""
 
 GREETING_TOKENS: set[str] = {
     "hi", "hello", "hey", "greetings", "sup", "yo",
     "good morning", "good evening", "hey buddy",
 }
-"""Set of normalised greeting strings that short-circuit the RAG pipeline."""
 
-
-# ---------------------------------------------------------------------------
 # 1.  LLM Client Factory
-# ---------------------------------------------------------------------------
 
 def build_openrouter_client() -> Optional[OpenAI]:
-    """Construct an OpenAI-compatible client pointed at OpenRouter.
-
-    OpenRouter aggregates hundreds of LLM models behind a single
-    OpenAI-compatible API. By setting ``base_url`` to OpenRouter's
-    endpoint and providing an OpenRouter API key, the standard
-    ``openai.OpenAI`` client works without any modification.
-
-    The ``HTTP-Referer`` and ``X-Title`` default headers are optional
-    but recommended by OpenRouter for usage tracking in their dashboard.
-    They do not affect billing or rate limits.
-
-    Returns:
-        A configured :class:`openai.OpenAI` client for OpenRouter,
-        or ``None`` if the API key is missing from the environment.
-    """
     if not OPENROUTER_API_KEY:
         print("[INIT] OPENROUTER_API_KEY not found in environment. "
               "OpenRouter will not be available.")
@@ -127,16 +77,6 @@ def build_openrouter_client() -> Optional[OpenAI]:
 
 
 def build_groq_client() -> Optional[OpenAI]:
-    """Construct an OpenAI-compatible client pointed at Groq.
-
-    Groq's API is fully OpenAI-compatible. Pointing ``base_url`` at
-    Groq's endpoint converts the standard client into a Groq client.
-    No Groq-specific SDK is required.
-
-    Returns:
-        A configured :class:`openai.OpenAI` client for Groq,
-        or ``None`` if the API key is missing from the environment.
-    """
     if not GROQ_API_KEY:
         print("[INIT] GROQ_API_KEY not found in environment. "
               "Groq fallback will not be available.")
@@ -150,30 +90,8 @@ def build_groq_client() -> Optional[OpenAI]:
     return client
 
 
-# ---------------------------------------------------------------------------
 # 2.  Infrastructure Initialisation
-# ---------------------------------------------------------------------------
-
 def load_embedding_model(model_name: str) -> HuggingFaceEmbeddings:
-    """Load and return a HuggingFace sentence-embedding model.
-
-    The embedding model converts raw text into a fixed-length dense vector
-    so that semantic similarity can be measured via cosine distance.
-    This function is intentionally separated from the FAISS loader so that
-    each component can be tested or swapped independently.
-
-    Args:
-        model_name: A valid HuggingFace Hub model identifier string,
-                    e.g. ``"sentence-transformers/all-mpnet-base-v2"``.
-
-    Returns:
-        A :class:`HuggingFaceEmbeddings` instance ready for encoding.
-
-    Raises:
-        RuntimeError: If the model cannot be downloaded or initialised.
-                      The full traceback is printed so the developer can
-                      diagnose network or library issues immediately.
-    """
     print(f"[INIT] Loading embedding model: '{model_name}' ...")
     try:
         embedder = HuggingFaceEmbeddings(model_name=model_name)
@@ -192,30 +110,6 @@ def load_vector_database(
     db_path: str,
     embedder: HuggingFaceEmbeddings,
 ) -> Optional[FAISS]:
-    """Load a persisted FAISS vector index from disk.
-
-    FAISS stores document chunk embeddings in an optimised binary index
-    (typically an IVF or Flat index). At query time, the query vector is
-    compared against all stored vectors using inner-product or L2 distance,
-    returning the top-k nearest neighbours in sub-linear time for large
-    corpora.
-
-    Args:
-        db_path: Path to the directory containing ``index.faiss``
-                 and ``index.pkl``.
-        embedder: The same embedding model used when the index was built.
-                  Mismatched models produce meaningless similarity scores.
-
-    Returns:
-        A loaded :class:`FAISS` vector store, or ``None`` if loading
-        fails. Returning ``None`` lets the Flask server start and return
-        a graceful degraded response instead of crashing.
-
-    Note:
-        ``allow_dangerous_deserialization=True`` is required by LangChain
-        because ``index.pkl`` is loaded with ``pickle``. Only set this
-        flag for indexes you have built yourself from trusted sources.
-    """
     print(f"[INIT] Loading FAISS vector database from '{db_path}' ...")
     try:
         vector_db = FAISS.load_local(
@@ -231,51 +125,13 @@ def load_vector_database(
         traceback.print_exc()
         return None
 
-
-# ---------------------------------------------------------------------------
 # 3.  LLM Call — Primary + Fallback
-# ---------------------------------------------------------------------------
-
 def call_llm_with_fallback(
     messages: list[dict[str, str]],
     temperature: float,
     primary_client: Optional[OpenAI],
     fallback_client: Optional[OpenAI],
 ) -> tuple[str, str]:
-    """Attempt the primary LLM provider; fall back to secondary on failure.
-
-    Provider Fallback Design:
-        This function implements a simple linear fallback chain:
-
-            OpenRouter (Gemini 2.0 Flash) → Groq (LLaMA 3.3 70B)
-
-        Each provider is tried sequentially. The first successful
-        response is returned immediately. If both fail, a descriptive
-        error string is returned so the Flask route can surface it
-        to the user without crashing.
-
-        This approach is preferred over silent retry loops because:
-        (a) it is completely transparent in the console logs,
-        (b) it avoids burning free-tier quota on repeated retries,
-        (c) the exact failure point is always visible in the traceback.
-
-    Args:
-        messages:         OpenAI-format message list (system + user turns).
-        temperature:      Sampling temperature passed to both providers.
-        primary_client:   Configured OpenRouter client (may be ``None``
-                          if the key was absent at startup).
-        fallback_client:  Configured Groq client (may be ``None``
-                          if the key was absent at startup).
-
-    Returns:
-        A two-tuple ``(response_text, provider_label)`` where:
-
-        - ``response_text``: The model's reply as a plain string.
-        - ``provider_label``: Human-readable label for the UI,
-          e.g. ``"OpenRouter — gemini-2.0-flash-exp:free"``.
-
-        Returns an error string + ``"None"`` label if both providers fail.
-    """
     # ── Attempt 1: OpenRouter (Primary) ─────────────────────────────────
     if primary_client is not None:
         try:
@@ -325,42 +181,12 @@ def call_llm_with_fallback(
     return error_message, "None"
 
 
-# ---------------------------------------------------------------------------
 # 4.  RAG Core Logic
-# ---------------------------------------------------------------------------
-
 def optimise_query(
     raw_query: str,
     primary_client: Optional[OpenAI],
     fallback_client: Optional[OpenAI],
 ) -> str:
-    """Expand a raw user query with domain-specific legal keywords.
-
-    Motivation (Query Expansion):
-        A user may write "my neighbour built without permission", but the
-        municipal bye-law corpus uses terminology like "unauthorised
-        construction", "building permit violation", or "Section 52 notice".
-        A vanilla embedding of colloquial words may not surface the most
-        relevant chunks because the embedding space was shaped by formal
-        legal text during indexing.
-
-        By asking the LLM to translate the query into expert vocabulary
-        *before* embedding, we improve retrieval recall without any
-        changes to the FAISS index itself. This technique is known as
-        HyDE (Hypothetical Document Embeddings) in its stronger form;
-        here we use a lighter keyword-expansion variant.
-
-    Args:
-        raw_query:       The unmodified query string entered by the user.
-        primary_client:  OpenRouter client (may be ``None``).
-        fallback_client: Groq client (may be ``None``).
-
-    Returns:
-        A single enriched string: ``"<raw_query> <kw1> <kw2> ..."``.
-        Falls back to ``raw_query`` unchanged if both LLM providers fail,
-        ensuring the pipeline continues with reduced retrieval quality
-        rather than aborting entirely.
-    """
     optimisation_prompt: list[dict[str, str]] = [
         {
             "role": "system",
@@ -385,9 +211,6 @@ def optimise_query(
             primary_client=primary_client,
             fallback_client=fallback_client,
         )
-
-        # Guard: if both providers returned an error string, the keywords
-        # will start with "⚠️" — in that case skip the expansion.
         if keywords.startswith("⚠️"):
             print("[WARNING] Query optimisation skipped (provider error).")
             return raw_query
@@ -409,36 +232,6 @@ def retrieve_context(
     vector_db: FAISS,
     top_k: int = TOP_K_DOCUMENTS,
 ) -> tuple[str, list[str]]:
-    """Retrieve the most semantically relevant document chunks from FAISS.
-
-    How Similarity Search Works:
-        1. The ``query`` string is encoded by the same embedding model
-           used to build the index, producing a 768-dim query vector.
-        2. FAISS computes cosine similarity (or L2 distance) between the
-           query vector and every stored chunk vector.
-        3. The ``top_k`` chunks with the highest similarity scores are
-           returned as :class:`langchain.schema.Document` objects.
-
-    Grounding Principle:
-        The concatenated chunks form the *context window* injected into
-        the generation prompt. By restricting the LLM to only this
-        context, we prevent it from drawing on parametric (trained)
-        knowledge that may be outdated, jurisdiction-specific, or
-        hallucinated. This is the defining property of RAG.
-
-    Args:
-        query:     The expanded query string from :func:`optimise_query`.
-        vector_db: A loaded FAISS vector store instance.
-        top_k:     Maximum number of document chunks to retrieve.
-
-    Returns:
-        A two-tuple:
-
-        - **context_text** (``str``): Retrieved chunks concatenated with
-          page-number annotations for prompt injection.
-        - **sources** (``list[str]``): Deduplicated, sorted source labels
-          for UI citation (e.g. ``["Page 17", "Page 23"]``).
-    """
     raw_results = vector_db.similarity_search(query, k=top_k)
 
     context_parts: list[str] = []
@@ -468,32 +261,6 @@ def build_generation_prompt(
     retrieved_context: str,
     mode: str,
 ) -> list[dict[str, str]]:
-    """Construct the structured prompt that bounds LLM generation to retrieved facts.
-
-    Prompt Engineering Rationale:
-        The system message acts as a *constraint boundary* for the LLM.
-        Injecting the retrieved context and instructing the model to answer
-        *only* from that context is the foundational RAG principle: the
-        language model provides reasoning and fluent generation; the
-        retriever provides factual grounding.
-
-        Two prompt variants handle different user personas:
-
-        - **citizen mode**: Plain-language explanations accessible to
-          members of the public. The model is explicitly told not to
-          invent fine amounts absent from the context.
-        - **lawyer mode**: Formal legal drafting. The model produces a
-          structured risk assessment and a formal municipal notice with
-          mandatory section references.
-
-    Args:
-        user_query:        The original, un-expanded user query.
-        retrieved_context: Concatenated FAISS chunks with page annotations.
-        mode:              ``"citizen"`` or ``"lawyer"``.
-
-    Returns:
-        A list of OpenAI-format message dicts ready for the API call.
-    """
     if mode == "lawyer":
         system_instruction: str = (
             "You are an expert Municipal Legal Drafting Assistant.\n\n"
@@ -537,21 +304,6 @@ def build_generation_prompt(
 
 
 def parse_lawyer_response(raw_response: str) -> tuple[str, str]:
-    """Split a lawyer-mode LLM response into risk section and draft notice.
-
-    The generation prompt instructs the model to use emoji markers
-    ``"⚠️ RISK ASSESSMENT"`` and ``"📝 DRAFT NOTICE"`` as structural
-    delimiters. This function extracts each section so the front-end
-    can render them in separate UI panels.
-
-    Args:
-        raw_response: The complete LLM reply string for a lawyer-mode request.
-
-    Returns:
-        A two-tuple ``(risk_section, draft_section)``. If markers are
-        absent (model deviated from prompt), the entire response is
-        returned in ``draft_section`` so no content is silently lost.
-    """
     if "📝 DRAFT NOTICE" not in raw_response:
         print("[WARNING] Lawyer-mode response missing expected section markers. "
               "Returning full response in draft_section.")
@@ -568,53 +320,13 @@ def parse_lawyer_response(raw_response: str) -> tuple[str, str]:
 
 
 def extract_metadata_patterns(text: str, pattern: str) -> list[str]:
-    """Find all unique regex matches in *text* and return them sorted.
-
-    Used to surface fine amounts and section references from the
-    free-text LLM response as discrete structured fields for the UI.
-    Presenting these separately improves scannability for both citizens
-    (who want to know the fine) and lawyers (who need section numbers).
-
-    Args:
-        text:    The string to search (typically the full LLM response).
-        pattern: A compiled-compatible regex pattern string.
-
-    Returns:
-        A sorted list of unique matched strings, or ``[]`` if none found.
-    """
     matches: list[str] = re.findall(pattern, text, re.IGNORECASE)
     return sorted(set(matches))
 
-
-# ---------------------------------------------------------------------------
 # 5.  Flask Application & Routing
-# ---------------------------------------------------------------------------
-
 def create_app() -> Flask:
-    """Construct, configure, and return the Flask application instance.
-
-    Using an application factory pattern (rather than a module-level
-    ``app = Flask(__name__)``) is a Flask best practice for testability:
-    each test suite call to ``create_app()`` gets a fresh, isolated instance
-    with no shared state between tests.
-
-    Startup sequence:
-        1. Load the HuggingFace embedding model.
-        2. Load the FAISS vector index from disk.
-        3. Construct the OpenRouter (primary) LLM client.
-        4. Construct the Groq (fallback) LLM client.
-        5. Register all Flask routes.
-
-    Returns:
-        A fully configured :class:`flask.Flask` application instance.
-    """
     flask_app = Flask(__name__)
 
-    # ------------------------------------------------------------------
-    # Initialise all shared resources once at server startup.
-    # Storing them in flask_app.config avoids module-level globals and
-    # makes the dependency chain explicit and testable.
-    # ------------------------------------------------------------------
     flask_app.config["EMBEDDER"] = load_embedding_model(EMBEDDING_MODEL_NAME)
 
     flask_app.config["VECTOR_DB"] = load_vector_database(
@@ -639,9 +351,7 @@ def create_app() -> Flask:
             + "=" * 60 + "\n"
         )
 
-    # ──────────────────────────────────────────────────────────────────
     # Route: Home
-    # ──────────────────────────────────────────────────────────────────
     @flask_app.route("/")
     def home() -> str:
         """Serve the main chat interface HTML page.
@@ -651,9 +361,7 @@ def create_app() -> Flask:
         """
         return render_template("index.html")
 
-    # ──────────────────────────────────────────────────────────────────
     # Route: Chat — Full RAG Pipeline Entry Point
-    # ──────────────────────────────────────────────────────────────────
     @flask_app.route("/chat", methods=["POST"])
     def chat() -> tuple[Response, int] | Response:
         """Handle a user query through the full three-stage RAG pipeline.
@@ -690,8 +398,6 @@ def create_app() -> Flask:
             return jsonify({"error": "Message cannot be empty."}), 400
 
         # ── Stage 2: Greeting Short-Circuit ─────────────────────────
-        # Normalise to a bare token and check against the known greeting
-        # set. This avoids wasting free-tier LLM quota on non-queries.
         normalised_query: str = (
             user_query.lower().strip().replace(".", "").replace("!", "")
         )
@@ -804,10 +510,7 @@ def create_app() -> Flask:
     return flask_app
 
 
-# ---------------------------------------------------------------------------
 # 6.  Entry Point
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     app = create_app()
     app.run(host="0.0.0.0", port=7860, debug=False)
